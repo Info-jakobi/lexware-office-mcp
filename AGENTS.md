@@ -50,7 +50,11 @@ The repository follows the [golang-standards/project-layout](https://github.com/
 
 - `cmd/lexware-office-mcp/main.go`: application entrypoint
 - `internal/lexware/config.go`: environment-based configuration loading
-- `internal/lexware/client.go`: authenticated Lexware HTTP client built on resty with 429 retry handling
+- `internal/lexware/client.go`: authenticated Lexware HTTP client built on resty with request pacing (2 requests per second) and 429 retry handling
+- `internal/lexware/types.go`: typed request and response models
+- `internal/lexware/workflows.go`: typed Lexware operations, including follow-up voucher workflows
+- `internal/lexware/validation.go`: local validation and normalization before requests are sent
+- `internal/lexware/dates.go`: date normalization to the Lexware timestamp format (Europe/Berlin)
 - `internal/server/server.go`: MCP server setup and tool registration
 - `build/goreleaser/.goreleaser.yml`: GoReleaser configuration for multi-platform releases
 - `build/package/docker/`: Dockerfiles for container image builds
@@ -63,17 +67,38 @@ The repository currently exposes these MCP tools:
 
 - `lexware_get_profile`
 - `lexware_create_simple_contact`
+- `lexware_create_contact`
+- `lexware_search_contacts`
+- `lexware_get_contact`
+- `lexware_search_articles`
+- `lexware_list_vouchers`
+- `lexware_list_payment_conditions`
+- `lexware_create_quotation`
+- `lexware_get_quotation`
+- `lexware_create_order_confirmation`
+- `lexware_create_order_confirmation_from_quotation`
+- `lexware_get_order_confirmation`
 - `lexware_create_invoice`
+- `lexware_create_invoice_from_voucher`
+- `lexware_get_invoice`
+- `lexware_get_down_payment_invoice`
+
+Conventions shared by the voucher tools:
+
+- Dates accept `YYYY-MM-DD` or RFC 3339 and are normalized by `NormalizeDate`.
+- Write payloads are validated locally (`prepare()` methods) before any request is sent; keep new validation there.
+- Follow-up vouchers send only the leading unit price (gross for `taxType` gross, net otherwise).
+- `internal/server/server_test.go` asserts the exact tool list; update it when adding or removing tools.
 
 When adding or removing tools, update `README.md` and this file before committing.
 
 ## Preferred Next Steps
 
-- Add dedicated invoice operations beyond single-invoice retrieval
-- Add typed voucher and file workflows
-- Improve endpoint-specific request and response typing
-- Add tests for config loading, client behavior, and MCP tool handlers
-- Consider better error mapping and retry strategy for Lexware API failures
+- Expose rendered voucher PDFs (`/v1/{resource}/{id}/file`) and file uploads
+- Add contact updates and article management
+- Add credit notes, delivery notes, and dunnings
+- Add tests for config loading
+- Consider better error mapping for Lexware validation errors (HTTP 400/406)
 
 ## Release Process
 

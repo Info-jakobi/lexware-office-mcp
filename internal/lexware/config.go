@@ -11,14 +11,18 @@ import (
 const (
 	defaultBaseURL   = "https://api.lexware.io"
 	defaultUserAgent = "lexware-office-mcp/0.1.0"
+
+	// Lexware allows two requests per second per client.
+	defaultMinRequestInterval = 500 * time.Millisecond
 )
 
 type Config struct {
-	APIToken         string
-	BaseURL          string
-	UserAgent        string
-	HTTPTimeout      time.Duration
-	FinalizeInvoices bool
+	APIToken           string
+	BaseURL            string
+	UserAgent          string
+	HTTPTimeout        time.Duration
+	MinRequestInterval time.Duration
+	FinalizeInvoices   bool
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -38,11 +42,12 @@ func LoadConfigFromEnv() (Config, error) {
 	}
 
 	return Config{
-		APIToken:         token,
-		BaseURL:          strings.TrimRight(baseURL, "/"),
-		UserAgent:        userAgent,
-		HTTPTimeout:      30 * time.Second,
-		FinalizeInvoices: parseBoolEnv("LEXWARE_FINALIZE_INVOICES", false),
+		APIToken:           token,
+		BaseURL:            strings.TrimRight(baseURL, "/"),
+		UserAgent:          userAgent,
+		HTTPTimeout:        30 * time.Second,
+		MinRequestInterval: defaultMinRequestInterval,
+		FinalizeInvoices:   parseBoolEnv("LEXWARE_FINALIZE_INVOICES", false),
 	}, nil
 }
 

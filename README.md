@@ -9,7 +9,9 @@ Lexware Office is one of the most popular cloud accounting platforms in Germany.
 **Key features:**
 
 - **Typed tools only** -- every tool has a strict input/output schema, no raw API passthrough
-- **Automatic rate limiting** -- built-in retry logic for Lexware API throttling (HTTP 429)
+- **Automatic rate limiting** -- requests are paced to the Lexware limit of 2 per second, and throttled requests (HTTP 429) are retried
+- **Quotation to invoice workflow** -- create quotations, turn accepted quotations into linked order confirmations, and prepare linked draft invoices without re-typing line items
+- **Validation before sending** -- missing quantities, prices, units, performance dates, or addresses are rejected locally with a clear message
 - **Stdio transport** -- works out of the box with Claude, Cursor, Codex, Windsurf, and other MCP clients
 - **Minimal footprint** -- single binary or Docker image, no external services required
 - **Multi-platform** -- pre-built binaries for Linux, macOS, and Windows (amd64 + arm64)
@@ -20,7 +22,35 @@ Lexware Office is one of the most popular cloud accounting platforms in Germany.
 |------|-------------|
 | `lexware_get_profile` | Fetch the Lexware Office profile for the configured API token |
 | `lexware_create_simple_contact` | Create a customer contact with a name and optional reference |
-| `lexware_create_invoice` | Create an invoice with line items, tax, and payment conditions |
+| `lexware_create_contact` | Create a private or business customer with billing address, email, and phone numbers |
+| `lexware_search_contacts` | Search contacts by name, email, or customer/vendor number |
+| `lexware_get_contact` | Fetch a single contact |
+| `lexware_search_articles` | Search articles by article number, GTIN, or type |
+| `lexware_list_vouchers` | List vouchers by type and status with totals and open amounts |
+| `lexware_list_payment_conditions` | List the configured payment conditions |
+| `lexware_create_quotation` | Create a quotation, including optional line items |
+| `lexware_get_quotation` | Fetch a quotation |
+| `lexware_create_order_confirmation` | Create an order confirmation, optionally linked to a quotation |
+| `lexware_create_order_confirmation_from_quotation` | Create a linked order confirmation from an accepted quotation |
+| `lexware_get_order_confirmation` | Fetch an order confirmation |
+| `lexware_create_invoice` | Create an invoice, optionally linked to a quotation or order confirmation |
+| `lexware_create_invoice_from_voucher` | Create a linked invoice from a quotation or order confirmation |
+| `lexware_get_invoice` | Fetch an invoice |
+| `lexware_get_down_payment_invoice` | Fetch a down payment invoice |
+
+### Conventions
+
+- **Dates** accept `YYYY-MM-DD` (interpreted as midnight in Europe/Berlin) or RFC 3339 timestamps and are sent in the Lexware timestamp format. Voucher list date filters use `YYYY-MM-DD`.
+- **Quantities** may have decimals, for example `23.45` square meters.
+- **Prices**: set `unitPrice.netAmount` for net and all other tax types, or `unitPrice.grossAmount` when `taxType` is `gross`. The currency defaults to `EUR`.
+- **Follow-up vouchers** copy address, line items, prices, discounts, tax, and payment conditions from the preceding voucher. Only the leading price (net or gross) is sent so Lexware recalculates the other one. The response includes the source voucher number and totals for cross-checking.
+- **Invoices** require `shippingConditions` (date or period of performance). Created invoices stay drafts unless `finalize` or `LEXWARE_FINALIZE_INVOICES` says otherwise.
+
+### Limitations
+
+- Lexware does not accept follow-up vouchers for quotations that contain optional or alternative line items. Resolve these positions in Lexware first, or create the voucher from a full payload without a link.
+- Down payment invoices can only be read through the public API.
+- Rendered PDF documents are not exposed yet.
 
 ## Prerequisites
 
@@ -309,6 +339,94 @@ Once connected, your AI assistant can call the following tools.
 }
 ```
 
+### Create a quotation
+
+```json
+{
+  "name": "lexware_create_quotation",
+  "arguments": {
+    "quotation": {
+      "voucherDate": "2026-09-29",
+      "expirationDate": "2026-10-29",
+      "address": {
+        "name": "Max Mustermann",
+        "street": "Musterstrasse 1",
+        "city": "Ingolstadt",
+        "zip": "85049",
+        "countryCode": "DE"
+      },
+      "lineItems": [
+        { "type": "text", "name": "Bathroom ground floor" },
+        {
+          "type": "custom",
+          "name": "Wall tiling 30x60",
+          "quantity": 23.45,
+          "unitName": "m²",
+          "unitPrice": { "netAmount": 65.5, "taxRatePercentage": 19 }
+        },
+        {
+          "type": "custom",
+          "name": "Tiled niche",
+          "quantity": 1,
+          "unitName": "Stk",
+          "unitPrice": { "netAmount": 180, "taxRatePercentage": 19 },
+          "optional": true
+        }
+      ],
+      "taxConditions": { "taxType": "net" }
+    },
+    "finalize": false
+  }
+}
+```
+
+### Turn an accepted quotation into an order confirmation
+
+```json
+{
+  "name": "lexware_create_order_confirmation_from_quotation",
+  "arguments": {
+    "quotationId": "7e1b6e4c-0000-0000-0000-000000000000",
+    "shippingConditions": {
+      "shippingType": "serviceperiod",
+      "shippingDate": "2026-10-12",
+      "shippingEndDate": "2026-10-23"
+    },
+    "deliveryTerms": "Execution in calendar weeks 42 and 43"
+  }
+}
+```
+
+### Prepare a draft invoice from an order confirmation
+
+```json
+{
+  "name": "lexware_create_invoice_from_voucher",
+  "arguments": {
+    "precedingVoucherType": "orderconfirmation",
+    "precedingVoucherId": "0c5f2a91-0000-0000-0000-000000000000",
+    "shippingConditions": {
+      "shippingType": "serviceperiod",
+      "shippingDate": "2026-10-12",
+      "shippingEndDate": "2026-10-23"
+    },
+    "finalize": false
+  }
+}
+```
+
+### List unpaid invoices
+
+```json
+{
+  "name": "lexware_list_vouchers",
+  "arguments": {
+    "voucherTypes": ["invoice"],
+    "voucherStatuses": ["open", "overdue"]
+  }
+}
+```
+
 ### Create an invoice
 
 ```json
@@ -384,11 +502,14 @@ make release-snapshot  # Build without publishing
 
 ## Roadmap
 
-- [ ] More contact operations (list, get, update)
+- [x] Contact search, lookup, and creation
+- [x] Quotation, order confirmation, and invoice workflows with linked follow-up vouchers
+- [x] Voucher list and payment condition lookups
+- [x] Unit tests for validation, request building, and MCP tool handlers
+- [ ] Contact updates
 - [ ] Article management tools
-- [ ] Voucher and file workflows
+- [ ] Rendered voucher PDFs and file uploads
 - [ ] Event subscription support
-- [ ] Unit and integration tests
 
 ## Links
 
