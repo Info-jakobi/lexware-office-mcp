@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -16,6 +17,8 @@ type Client struct {
 }
 
 func NewClient(cfg Config) *Client {
+	pacer := &requestPacer{interval: cfg.MinRequestInterval}
+
 	restClient := resty.New().
 		SetBaseURL(cfg.BaseURL).
 		SetTimeout(cfg.HTTPTimeout).
@@ -28,6 +31,11 @@ func NewClient(cfg Config) *Client {
 		SetRetryMaxWaitTime(60 * time.Second).
 		AddRetryCondition(func(resp *resty.Response, err error) bool {
 			return err == nil && resp != nil && resp.StatusCode() == http.StatusTooManyRequests
+		}).
+		// Pace every attempt, retries included, so bursts of tool calls stay
+		// within the Lexware limit instead of relying on 429 retries.
+		OnBeforeRequest(func(_ *resty.Client, req *resty.Request) error {
+			return pacer.wait(req.Context())
 		})
 
 	return &Client{
@@ -61,4 +69,40 @@ func (c *Client) FinalizeInvoices() bool {
 
 func (c *Client) newRequest(ctx context.Context) *resty.Request {
 	return c.restClient.R().SetContext(ctx)
+}
+
+// requestPacer spaces outgoing requests by a minimum interval.
+type requestPacer struct {
+	mu       sync.Mutex
+	interval time.Duration
+	next     time.Time
+}
+
+func (p *requestPacer) wait(ctx context.Context) error {
+	if p.interval <= 0 {
+		return nil
+	}
+
+	p.mu.Lock()
+	now := time.Now()
+	slot := p.next
+	if slot.Before(now) {
+		slot = now
+	}
+	p.next = slot.Add(p.interval)
+	p.mu.Unlock()
+
+	delay := time.Until(slot)
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
